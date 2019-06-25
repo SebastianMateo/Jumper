@@ -318,6 +318,11 @@ void AJumperCharacter::TryGrabLedge()
 		UKismetSystemLibrary::MoveComponentTo(GetCapsuleComponent(), WallGoToLocation(LedgeGrabHeightOffset, LedgeGrabNormalOffset), AllignToWall(), false, false, 0.1f, false, EMoveComponentAction::Move, ActionInfo);
 
 		//StopMovement
+		
+		// Reset movement
+		GetCharacterMovement()->RotationRate = FRotator(0.0f, 540.0f, 0.0f);
+		GetCharacterMovement()->GravityScale = 1.0f;
+		GetCharacterMovement()->bNotifyApex = true;
 	}
 }
 
@@ -345,7 +350,7 @@ void AJumperCharacter::ClimbLedge()
 			Execute_ClimbingLedge(AnimInstance, true);
 		}
 
-		IsClimbingLedge = false;
+		IsClimbingLedge = true;
 		IsHanging = false;
 	}
 }
