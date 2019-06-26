@@ -3,6 +3,7 @@
 #include "JumperGameMode.h"
 #include "JumperCharacter.h"
 #include "UObject/ConstructorHelpers.h"
+#include "hsm.h"
 
 AJumperGameMode::AJumperGameMode()
 {
