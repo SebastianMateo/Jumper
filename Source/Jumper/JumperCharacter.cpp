@@ -65,6 +65,9 @@ void AJumperCharacter::SetupPlayerInputComponent(class UInputComponent* PlayerIn
 	PlayerInputComponent->BindAxis("MoveForward", this, &AJumperCharacter::MoveForward);
 	PlayerInputComponent->BindAxis("MoveRight", this, &AJumperCharacter::MoveRight);
 
+	//PlayerInputComponent->BindAction("Push", IE_Pressed, this, &AJumperCharacter::Push);
+	//PlayerInputComponent->BindAction("Pull", IE_Released, this, &AJumperCharacter::Pull);
+
 	// We have 2 versions of the rotation bindings to handle different kinds of devices differently
 	// "turn" handles devices that provide an absolute delta, such as a mouse.
 	// "turnrate" is for devices that we choose to treat as a rate of change, such as an analog joystick
@@ -274,7 +277,6 @@ FTwoVectors AJumperCharacter::GetFloorTracerStartEnd(float Distance)
 
 void AJumperCharacter::Landed(const FHitResult& Hit)
 {
-	UE_LOG(LogTemp, Display, TEXT("Landed"));
 	GetCharacterMovement()->RotationRate = FRotator(0.0f, 540.0f, 0.0f);
 	GetCharacterMovement()->GravityScale = 1.0f;
 
@@ -284,8 +286,6 @@ void AJumperCharacter::Landed(const FHitResult& Hit)
 
 void AJumperCharacter::NotifyJumpApex()
 {
-	UE_LOG(LogTemp, Display, TEXT("Apex"));
-
 	// Make it less floaty
 	if (!IsSliding)
 	{
