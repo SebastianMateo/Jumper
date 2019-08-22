@@ -12,10 +12,10 @@
 #include "Kismet/KismetMathLibrary.h"
 #include "Kismet/KismetSystemLibrary.h"
 #include "CharMoveInterface.h"
+#include "States/States.h"
 
 //////////////////////////////////////////////////////////////////////////
 // AJumperCharacter
-
 AJumperCharacter::AJumperCharacter()
 {
 	// Set size for collision capsule
@@ -48,8 +48,10 @@ AJumperCharacter::AJumperCharacter()
 	FollowCamera->SetupAttachment(CameraBoom, USpringArmComponent::SocketName); // Attach the camera to the end of the boom and let the boom adjust to match the controller orientation
 	FollowCamera->bUsePawnControlRotation = false; // Camera does not rotate relative to arm
 
-	// Note: The skeletal mesh and anim blueprint references on the Mesh component (inherited from Character) 
-	// are set in the derived blueprint asset named MyCharacter (to avoid direct content references in C++)
+	// Set up the state machine
+	StateMachine.Initialize<IdleState>(this);
+
+	PrimaryActorTick.bCanEverTick = true;
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -65,6 +67,7 @@ void AJumperCharacter::SetupPlayerInputComponent(class UInputComponent* PlayerIn
 	PlayerInputComponent->BindAxis("MoveForward", this, &AJumperCharacter::MoveForward);
 	PlayerInputComponent->BindAxis("MoveRight", this, &AJumperCharacter::MoveRight);
 
+	PlayerInputComponent->BindAction("Crouch", IE_Pressed, this, &AJumperCharacter::CrouchEvent);
 	//PlayerInputComponent->BindAction("Push", IE_Pressed, this, &AJumperCharacter::Push);
 	//PlayerInputComponent->BindAction("Pull", IE_Released, this, &AJumperCharacter::Pull);
 
@@ -75,6 +78,14 @@ void AJumperCharacter::SetupPlayerInputComponent(class UInputComponent* PlayerIn
 	PlayerInputComponent->BindAxis("TurnRate", this, &AJumperCharacter::TurnAtRate);
 	PlayerInputComponent->BindAxis("LookUp", this, &APawn::AddControllerPitchInput);
 	PlayerInputComponent->BindAxis("LookUpRate", this, &AJumperCharacter::LookUpAtRate);
+}
+
+void AJumperCharacter::Tick(float DeltaSeconds)
+{
+	Super::Tick(DeltaSeconds); // Call parent class tick function  
+
+	StateMachine.UpdateStates(static_cast<int>(EEventId::Tick));
+	StateMachine.ProcessStateTransitions();
 }
 
 void AJumperCharacter::TurnAtRate(float Rate)
@@ -92,7 +103,7 @@ void AJumperCharacter::LookUpAtRate(float Rate)
 void AJumperCharacter::MoveForward(float Value)
 {
 	// TODO Move to different states
-	if (IsSliding || IsHanging)
+	if (CurrentState == EState::VE_Hanging || CurrentState == EState::VE_WallSliding || CurrentState == EState::VE_Climbing)
 		return;
 
 	if ((Controller != NULL) && (Value != 0.0f))
@@ -110,7 +121,7 @@ void AJumperCharacter::MoveForward(float Value)
 void AJumperCharacter::MoveRight(float Value)
 {
 	// TODO Move to different states
-	if (IsSliding || IsHanging)
+	if (CurrentState == EState::VE_Hanging || CurrentState == EState::VE_WallSliding || CurrentState == EState::VE_Climbing)
 		return;
 
 	if ( (Controller != NULL) && (Value != 0.0f) )
@@ -126,46 +137,18 @@ void AJumperCharacter::MoveRight(float Value)
 	}
 }
 
+void AJumperCharacter::CrouchEvent()
+{
+	StateMachine.UpdateStates(static_cast<int>(EEventId::Crouch));
+	StateMachine.ProcessStateTransitions();
+}
+
 void AJumperCharacter::Jump()
 {
+	StateMachine.UpdateStates(static_cast<int>(EEventId::Jump));
+	StateMachine.ProcessStateTransitions();
+	
 	GetCharacterMovement()->bNotifyApex = true;
-
-	if (IsHanging)
-	{
-		UE_LOG(LogTemp, Display, TEXT("Climb ledge"));
-		ClimbLedge();
-	}
-	else
-	{
-		if (!IsClimbing())
-		{
-			if (IsSliding)
-			{
-				// Wall Jump
-				UE_LOG(LogTemp, Display, TEXT("Wall Jump"));
-
-				StopWallSlide();
-
-				// Rotate 180°
-				auto ActorRotation = GetActorRotation();
-				ActorRotation.Yaw -= 180;
-				SetActorRotation(ActorRotation);
-
-				// Launch the character
-				auto LaunchVelocity = GetActorForwardVector() * 500.0f + FVector(0.0f, 0.0f, 700.0f);
-				LaunchCharacter(LaunchVelocity, true, true);
-
-				// Stop the character from rotating
-				GetCharacterMovement()->RotationRate = FRotator(0.0f, 0.0f, 0.0f);
-			}
-			else
-			{
-				UE_LOG(LogTemp, Display, TEXT("Jump"));
-				GetCharacterMovement()->RotationRate = FRotator(0.0f, 0.0f, 0.0f);
-				ACharacter::Jump();
-			}
-		}
-	}
 }
 
 FTwoVectors AJumperCharacter::GetLedgeTraceStartEnd(float StartHeight, float Distance, float ForwardOffset)
@@ -183,89 +166,23 @@ FTwoVectors AJumperCharacter::GetLedgeTraceStartEnd(float StartHeight, float Dis
 	return FTwoVectors(StartVector, EndVector);
 }
 
-
 FTwoVectors AJumperCharacter::GetWallTracerStartEnd(float ZOffset, float TraceLength)
-{
-	
+{	
 	auto StartVector = GetActorLocation() + FVector(0.0f, 0.0f, ZOffset);
 	auto EndVector = StartVector + GetActorForwardVector() * TraceLength;
 
 	return FTwoVectors(StartVector, EndVector);
 }
 
-
 bool AJumperCharacter::IsClimbing()
 {
 	return (GetCharacterMovement()->MovementMode == EMovementMode::MOVE_Flying);
-}
-
-void AJumperCharacter::StopWallSlide()
-{
-	UE_LOG(LogTemp, Display, TEXT("Stop Wall side"));
-	
-	// Call WallSliding event on the animation blueprint
-	USkeletalMeshComponent* Mesh = FindComponentByClass<USkeletalMeshComponent>();
-	auto AnimInstance = Cast<UObject>(Mesh->GetAnimInstance());
-	if (AnimInstance->GetClass()->ImplementsInterface(UCharMoveInterface::StaticClass()))
-	{
-		Execute_WallSliding(AnimInstance, false);
-	}
-	
-	GetCharacterMovement()->GravityScale = 1.0f;
-	GetCharacterMovement()->RotationRate = FRotator(0.0f, 540.0f, 0.0f);
-	IsSliding = false;
-	CanStartWallSlide = true;
-}
-
-void AJumperCharacter::TryWallSlide()
-{
-	if (CanDoWallSlide(70.0f))
-	{
-		UE_LOG(LogTemp, Display, TEXT("Doing Wall Slide"));
-		
-		//Start Wall slide
-		CanStartWallSlide = false;
-
-		// Wall sliding start
-		SetActorRotation(AllignToWall());
-
-		// Stop moving and stop rotations
-		GetCharacterMovement()->Velocity = FVector(0.0f, 0.0f, 0.0f);
-		GetCharacterMovement()->RotationRate = FRotator(0.0f, 0.0f, 0.0f);
-
-		// Call WallSliding event on the animation blueprint
-		USkeletalMeshComponent* Mesh = FindComponentByClass<USkeletalMeshComponent>();
-		auto AnimInstance = Cast<UObject>(Mesh->GetAnimInstance());
-		if (AnimInstance->GetClass()->ImplementsInterface(UCharMoveInterface::StaticClass()))
-		{
-			UE_LOG(LogTemp, Display, TEXT("Calling interface"));
-			Execute_WallSliding(AnimInstance, true);
-		}
-
-		GetCharacterMovement()->GravityScale = 0.3f;
-		IsSliding = true;
-	}
-}
-
-bool AJumperCharacter::CanDoWallSlide(float Distance)
-{	
-	// Check if we are close to the wall
-	bool bCanDoWallSlide = (GetActorLocation() - WallTraceImpact).Size() < Distance;
-
-	bCanDoWallSlide &= IsNearWall;
-
-	bCanDoWallSlide &= !(IsSliding | IsNearFloor | IsClimbingLedge | IsHanging);
-
-	bCanDoWallSlide &= GetVelocity().Z < 5.0f;
-	
-	return bCanDoWallSlide;
 }
 
 FRotator AJumperCharacter::AllignToWall()
 {
 	return UKismetMathLibrary::MakeRotFromXZ(WallNormal * -1, GetActorUpVector());
 }
-
 
 FTwoVectors AJumperCharacter::GetFloorTracerStartEnd(float Distance)
 {
@@ -279,50 +196,15 @@ void AJumperCharacter::Landed(const FHitResult& Hit)
 {
 	GetCharacterMovement()->RotationRate = FRotator(0.0f, 540.0f, 0.0f);
 	GetCharacterMovement()->GravityScale = 1.0f;
-
 	GetCharacterMovement()->bNotifyApex = true;
 }
-
 
 void AJumperCharacter::NotifyJumpApex()
 {
 	// Make it less floaty
-	if (!IsSliding)
+	if (CurrentState != EState::VE_WallSliding)
 	{
 		GetCharacterMovement()->GravityScale = 2.0f;
-	}
-}
-
-void AJumperCharacter::TryGrabLedge()
-{
-	auto CharacterMovement = GetCharacterMovement();
-
-	if (!IsNearFloor && IsNearLedgeHeight && CharacterMovement->MovementMode == EMovementMode::MOVE_Falling && !IsClimbingLedge)
-	{
-		CharacterMovement->StopMovementImmediately();
-
-		// Call GrabLedge event on the animation blueprint
-		USkeletalMeshComponent* Mesh = FindComponentByClass<USkeletalMeshComponent>();
-		auto AnimInstance = Cast<UObject>(Mesh->GetAnimInstance());
-		if (AnimInstance->GetClass()->ImplementsInterface(UCharMoveInterface::StaticClass()))
-		{
-			UE_LOG(LogTemp, Display, TEXT("Calling interface"));
-			Execute_GrabLedge(AnimInstance, true);
-		}
-
-		CharacterMovement->MovementMode = EMovementMode::MOVE_Flying;
-		IsHanging = true;
-
-		FLatentActionInfo ActionInfo;
-		ActionInfo.CallbackTarget = this;
-		UKismetSystemLibrary::MoveComponentTo(GetCapsuleComponent(), WallGoToLocation(LedgeGrabHeightOffset, LedgeGrabNormalOffset), AllignToWall(), false, false, 0.1f, false, EMoveComponentAction::Move, ActionInfo);
-
-		//StopMovement
-		
-		// Reset movement
-		GetCharacterMovement()->RotationRate = FRotator(0.0f, 540.0f, 0.0f);
-		GetCharacterMovement()->GravityScale = 1.0f;
-		GetCharacterMovement()->bNotifyApex = true;
 	}
 }
 
@@ -333,24 +215,4 @@ FVector AJumperCharacter::WallGoToLocation(float HeightOffset, float NormalOffse
 	float Z = LedgeHeight.Z - HeightOffset;
 
 	return FVector(X, Y, Z);
-}
-
-void AJumperCharacter::ClimbLedge()
-{
-	if (!IsClimbingLedge) 
-	{
-		GetCharacterMovement()->MovementMode = EMovementMode::MOVE_Flying;
-
-		// Call ClimbingLedge event on the animation blueprint
-		USkeletalMeshComponent* Mesh = FindComponentByClass<USkeletalMeshComponent>();
-		auto AnimInstance = Cast<UObject>(Mesh->GetAnimInstance());
-		if (AnimInstance->GetClass()->ImplementsInterface(UCharMoveInterface::StaticClass()))
-		{
-			UE_LOG(LogTemp, Display, TEXT("Calling interface"));
-			Execute_ClimbingLedge(AnimInstance, true);
-		}
-
-		IsClimbingLedge = true;
-		IsHanging = false;
-	}
 }
